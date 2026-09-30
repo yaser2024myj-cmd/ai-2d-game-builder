@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>صانع الألعاب 2D بالذكاء الاصطناعي</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+        body { display: flex; height: 100vh; background: #12131c; color: #fff; overflow: hidden; }
+        
+        /* شريط المحادثة والتحكم */
+        #sidebar { width: 340px; background: #1a1b26; display: flex; flex-direction: column; border-left: 2px solid #2f3242; }
+        #api-section { padding: 12px; background: #141520; border-bottom: 1px solid #2f3242; }
+        .input-style { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #3d4158; background: #242638; color: #fff; font-size: 13px; outline: none; }
+        .input-style:focus { border-color: #3b82f6; }
+        
+        /* سجل المحادثة */
+        #chat-history { flex: 1; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 14px; border-radius: 10px; max-width: 88%; font-size: 13px; line-height: 1.5; word-wrap: break-word; }
+        .user-msg { background: #3b82f6; align-self: flex-start; }
+        .ai-msg { background: #2a2c3d; align-self: flex-end; border: 1px solid #3d4158; }
+        
+        /* منطقة كتابة الأوامر */
+        #input-area { padding: 12px; background: #141520; display: flex; gap: 8px; border-top: 1px solid #2f3242; }
+        button { padding: 10px 16px; border: none; border-radius: 6px; background: #10b981; color: #fff; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { opacity: 0.9; }
+        
+        /* منطقة عرض اللعبة */
+        #game-container { flex: 1; display: flex; flex-direction: column; background: #090a0f; }
+        #top-bar { padding: 10px 16px; background: #141520; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2f3242; }
+        #game-frame { flex: 1; border: none; width: 100%; height: 100%; background: #000; }
+        .save-tag { font-size: 12px; color: #10b981; background: #10b98122; padding: 4px 8px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <!-- الشريط الجانبي -->
+    <div id="sidebar">
+        <div id="api-section">
+            <label style="font-size: 11px; color: #aaa; display: block; margin-bottom: 4px;">مفتاح Gemini API الخاص بك:</label>
+            <input type="password" id="api-key" class="input-style" placeholder="لصّق المفتاح هنا..." onchange="saveApiKey()">
+        </div>
+        
+        <div id="chat-history">
+            <div class="msg ai-msg">أهلاً بك! اكتب لي فكرة اللعبة اللي تبغى أبنيها لك من الصفر، وراح أكتب لك أكوادها وأعدل عليها معك خطوة بخطوة. 🚀</div>
+        </div>
+
+        <div id="input-area">
+            <input type="text" id="prompt-input" class="input-style" placeholder="اكتب فكرة اللعبة أو التعديل..." onkeydown="if(event.key==='Enter') sendPrompt()">
+            <button onclick="sendPrompt()">إرسال</button>
+        </div>
+    </div>
+
+    <!-- منطقة الشاشة الحية للعبة -->
+    <div id="game-container">
+        <div id="top-bar">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-weight: bold;">🎮 شاشة اللعبة (2D)</span>
+                <span id="save-status" class="save-tag">💾 محفوظة تلقائياً</span>
+            </div>
+            <div>
+                <button onclick="resetGame()" style="background: #ef4444; font-size: 12px; padding: 6px 12px;">🔄 لعبة جديدة من الصفر</button>
+            </div>
+        </div>
+        <iframe id="game-frame"></iframe>
+    </div>
+
+    <script>
+        let currentGameCode = "";
+
+        // عند فتح الصفحة: استرجاع مفتاح الـ API واللعبة المحفوظة إن وجدت
+        window.onload = function() {
+            const savedKey = localStorage.getItem('ai_api_key');
+            if (savedKey) document.getElementById('api-key').value = savedKey;
+
+            const savedCode = localStorage.getItem('user_saved_game');
+            if (savedCode) {
+                currentGameCode = savedCode;
+                updateGameView();
+                addMessage('ai', 'تم استرجاع اللعبة التي كنت تعمل عليها سابقاً بنجاح! جاهز لتلقي أي تعديل جديد.');
+            }
+        };
+
+        function saveApiKey() {
+            const key = document.getElementById('api-key').value.trim();
+            localStorage.setItem('ai_api_key', key);
+        }
+
+        function updateGameView() {
+            const frame = document.getElementById('game-frame');
+            frame.srcdoc = currentGameCode;
+        }
+
+        function addMessage(sender, text) {
+            const history = document.getElementById('chat-history');
+            const msg = document.createElement('div');
+            msg.className = `msg ${sender}-msg`;
+            msg.innerText = text;
+            history.appendChild(msg);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        // استخراج كود HTML من رد الذكاء الاصطناعي بشكل آمن
+        function extractCode(text) {
+            const match = text.match(/```html([\s\S]*?)```/) || text.match(/```([\s\S]*?)```/);
+            if (match && match[1]) {
+                return match[1].trim();
+            }
+            return text.trim();
+        }
+
+        async function sendPrompt() {
+            const apiKey = document.getElementById('api-key').value.trim();
+            const input = document.getElementById('prompt-input');
+            const prompt = input.value.trim();
+
+            if (!apiKey) {
+                alert('الرجاء إدخال مفتاح Gemini API أولاً!');
+                return;
+            }
+            if (!prompt) return;
+
+            addMessage('user', prompt);
+            input.value = '';
+            addMessage('ai', 'جاري البرمجة والحفظ...');
+
+            let instruction = "";
+            if (!currentGameCode) {
+                instruction = `أنشئ لعبة 2D كاملة بملف HTML/CSS/JS واحد بناءً على طلب المستخدم التالي: "${prompt}".
+تأكد من جعل الواجهة مناسبة للوضع الأفقي للأنشطة والأزرار، وأضف تفاعلات وأزرار تحكم واضحة ومق عناصر التحكم والـ UI بشكل ممتاز. أرجع لي فقط كود HTML المكتمل بدون أي شرح أو كلام إضافي خارج علامات الكود.`;
+            } else {
+                instruction = `أنت تطور لعبة 2D حالية بملف HTML/CSS/JS واحد.
+طلب التعديل أو الإضافة من المستخدم: "${prompt}".
+
+الكود الحالي للعبة:
+${currentGameCode}
+
+قم بتحديث وتعديل الكود الحالي وتطبيق الطلب بدقة دون تخريب المميزات السابقة. أرجع لي كود HTML المكتمل والجديد فقط بدون أي شرح أو كلام إضافي خارج علامات الكود.`;
+            }
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [{ text: instruction }]
+                        }]
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.candidates && data.candidates[0].content.parts[0].text) {
+                    let rawText = data.candidates[0].content.parts[0].text;
+                    let cleanCode = extractCode(rawText);
+
+                    currentGameCode = cleanCode;
+                    updateGameView();
+
+                    // حفظ الكود تلقائياً في ذاكرة متصفح المستخدم
+                    localStorage.setItem('user_saved_game', currentGameCode);
+                    addMessage('ai', 'تم تنفيذ طلبك وبناء/تعديل اللعبة وحفظها تلقائياً! ⚡');
+                } else {
+                    addMessage('ai', 'حدث خطأ أثناء معالجة الرد من الذكاء الاصطناعي.');
+                }
+
+            } catch (error) {
+                addMessage('ai', 'حدث خطأ! تأكد من صحة المفتاح والاتصال بالإنترنت.');
+                console.error(error);
+            }
+        }
+
+        function resetGame() {
+            if (confirm('هل أنت متأكد؟ سيمسح الكود القديم لتبدأ لعبة جديدة تماماً من الصفر.')) {
+                localStorage.removeItem('user_saved_game');
+                currentGameCode = "";
+                updateGameView();
+                addMessage('ai', 'تم بدء جلسة جديدة! اكتب فكرة اللعبة الجديدة التي تبغاها.');
+            }
+        }
+    </script>
+</body>
+</html>
